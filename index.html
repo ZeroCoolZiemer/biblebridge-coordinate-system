@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>BibleBridge Coordinate Viewer</title>
+
+<style>
+
+body{
+font-family:Georgia,serif;
+background:#fafafa;
+color:#222;
+margin:0;
+}
+
+.container{
+max-width:720px;
+margin:auto;
+padding:30px 20px 120px;
+}
+
+h1{
+font-size:30px;
+margin-bottom:6px;
+}
+
+.subtitle{
+color:#666;
+margin-bottom:30px;
+}
+
+.controls{
+position:sticky;
+top:0;
+background:#fafafa;
+padding:12px 0;
+border-bottom:1px solid #ddd;
+margin-bottom:10px;
+z-index:10;
+}
+
+.controls input{
+padding:6px 10px;
+font-size:14px;
+}
+
+.controls button{
+padding:6px 10px;
+margin-left:6px;
+}
+
+.sticky-ref{
+position:sticky;
+top:56px;
+background:#fafafa;
+border-bottom:1px solid #ddd;
+padding:8px 0;
+font-size:16px;
+color:#444;
+z-index:9;
+}
+
+.book{
+font-size:32px;
+margin-top:60px;
+border-bottom:2px solid #ddd;
+}
+
+.chapter{
+margin-top:28px;
+font-size:20px;
+color:#555;
+}
+
+.verse{
+display:flex;
+gap:12px;
+padding:6px 0;
+}
+
+.vindex{
+width:70px;
+font-size:11px;
+color:#999;
+text-align:right;
+}
+
+.vnum{
+width:22px;
+font-size:12px;
+color:#777;
+}
+
+.vtext{
+flex:1;
+line-height:1.7;
+}
+
+.progress{
+position:fixed;
+bottom:0;
+left:0;
+height:4px;
+background:#6a5acd;
+width:0%;
+}
+
+.position{
+position:fixed;
+bottom:14px;
+right:16px;
+background:white;
+padding:6px 10px;
+border-radius:8px;
+font-size:12px;
+border:1px solid #ddd;
+}
+
+.controls select,
+.controls button,
+.controls input {
+  padding: 6px 10px;
+  font-size: 14px;
+  height: 32px;
+  box-sizing: border-box;
+}
+
+.controls select {
+  margin-left: 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  body {
+    background: #0f0f10;
+    color: #e5e5e5;
+  }
+
+  .container {
+    background: transparent;
+  }
+
+  .controls,
+  .sticky-ref {
+    background: #0f0f10;
+    border-color: #2a2a2a;
+  }
+
+  .subtitle {
+    color: #aaa;
+  }
+
+  .book {
+    border-bottom: 2px solid #2a2a2a;
+  }
+
+  .chapter {
+    color: #bbb;
+  }
+
+  .vindex {
+    color: #666;
+  }
+
+  .vnum {
+    color: #888;
+  }
+
+  .progress {
+    background: #8b7cff;
+  }
+
+  .position {
+    background: #1a1a1a;
+    border-color: #333;
+    color: #ddd;
+  }
+
+  input, select, button {
+    background: #1a1a1a;
+    color: #e5e5e5;
+    border: 1px solid #333;
+  }
+}
+
+.verse {
+  transition: background 0.4s ease;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+<h1>The Bible as a Coordinate System</h1>
+<div class="subtitle">
+31,102 verses — one continuous coordinate space. Same coordinates, multiple translations.
+</div>
+
+<div class="controls">
+
+<input id="jumpInput" placeholder="26137 · John 3:16 · 요 3:16">
+
+<button id="jumpBtn">Jump</button> <button id="midBtn">Midpoint</button>
+
+<select id="versionSelect">
+  <option value="KJV" selected>KJV</option>
+  <option value="LSG">LSG</option>
+  <option value="KRV">KRV</option>
+</select>
+
+</div>
+
+<div id="stickyRef" class="sticky-ref"></div>
+<div id="reader"></div>
+
+<div id="sentinel"></div>
+
+</div>
+
+<div class="progress" id="progress"></div>
+<div class="position" id="position"></div>
+
+<script>
+
+const BOOK_ALIASES = {
+  "john": "John",
+  "jn": "John",
+  "jean": "John",
+  "요": "John",
+  "요한": "John",
+  "요한복음": "John",
+  "matthew": "Matthew",
+  "mt": "Matthew",
+  "matthieu": "Matthew",
+  "마": "Matthew",
+  "마태": "Matthew",
+  "luke": "Luke",
+  "lk": "Luke",
+  "luc": "Luke",
+  "눅": "Luke",
+  "누가": "Luke",
+  "genesis": "Genesis",
+  "gen": "Genesis",
+  "genèse": "Genesis",
+  "창": "Genesis",
+  "창세기": "Genesis",
+  "ps": "Psalms",
+  "psalm": "Psalms",
+  "psaume": "Psalms",
+  "시": "Psalms",
+  "시편": "Psalms"
+};
+
+const API="https://holybible.dev/api/passage";
+
+let KEY = localStorage.getItem("bb_key") || "";
+
+if(!KEY){
+  KEY = prompt("Enter API key\nGet a free API key at https://holybible.dev/signup");
+  if(KEY){
+    localStorage.setItem("bb_key", KEY);
+  }
+}
+
+let VERSION="KJV";
+
+const TOTAL=31102;
+const CHUNK=60;
+
+let nextIndex=1;
+let loading=false;
+
+let lastBook=null;
+let lastChapter=null;
+
+const reader=document.getElementById("reader");
+const position=document.getElementById("position");
+const stickyRef=document.getElementById("stickyRef");
+const sentinel=document.getElementById("sentinel");
+
+async function load(){
+
+if(loading || nextIndex>TOTAL) return;
+
+loading=true;
+
+const start=nextIndex;
+const end=Math.min(start+CHUNK-1,TOTAL);
+
+const r=await fetch(
+`${API}?start_index=${start}&end_index=${end}&version=${VERSION}`,
+{headers:{Authorization:`Bearer ${KEY}`}}
+);
+
+const d=await r.json();
+
+d.data.forEach(v=>{
+
+if(v.book!==lastBook){
+
+const book=document.createElement("div");
+book.className="book";
+book.innerText=v.book;
+
+reader.appendChild(book);
+
+lastBook=v.book;
+lastChapter=null;
+}
+
+if(v.chapter!==lastChapter){
+
+const ch=document.createElement("div");
+ch.className="chapter";
+ch.innerText=`Chapter ${v.chapter}`;
+
+reader.appendChild(ch);
+
+lastChapter=v.chapter;
+}
+
+const row=document.createElement("div");
+row.className="verse";
+
+row.dataset.ref=`${v.book} ${v.chapter}:${v.verse}`;
+row.dataset.index=v.verse_index;
+
+row.innerHTML=`
+<div class="vindex">${v.verse_index}</div>
+<div class="vnum">${v.verse}</div>
+<div class="vtext">${v.text}</div>
+`;
+
+reader.appendChild(row);
+
+});
+
+nextIndex=end+1;
+loading=false;
+
+updatePosition();
+
+}
+
+function normalizeReference(input){
+
+  const parts = input.trim().split(/\s+/);
+  if(parts.length < 2) return input;
+
+  let book = parts[0].toLowerCase();
+  const rest = parts.slice(1).join(" ");
+
+  if(BOOK_ALIASES[book]){
+    book = BOOK_ALIASES[book];
+  } else {
+    book = parts[0];
+  }
+
+  return `${book} ${rest}`;
+}
+
+function highlightActiveVerse(){
+
+  const verses = document.querySelectorAll(".verse");
+  if(!verses.length) return;
+
+  let target = null;
+
+  for(let i = verses.length - 1; i >= 0; i--){
+    const rect = verses[i].getBoundingClientRect();
+    if(rect.top < 120){
+      target = verses[i];
+      break;
+    }
+  }
+
+  if(!target){
+    target = verses[0];
+  }
+
+  target.style.background = "rgba(255, 235, 120, 0.4)";
+
+  setTimeout(()=>{
+    target.style.background = "rgba(255, 235, 120, 0)";
+  },600);
+}
+
+function updatePosition(){
+
+  const verses = document.querySelectorAll(".verse");
+  if(!verses.length){
+    stickyRef.innerText = "";
+    position.innerText = "";
+    document.getElementById("progress").style.width = "0%";
+    return;
+  }
+
+  let activeVerse = null;
+
+  for(let i = verses.length - 1; i >= 0; i--){
+    const rect = verses[i].getBoundingClientRect();
+    if(rect.top < 120){
+      activeVerse = verses[i];
+      break;
+    }
+  }
+
+  if(!activeVerse){
+    for(let i = 0; i < verses.length; i++){
+      const rect = verses[i].getBoundingClientRect();
+      if(rect.bottom > 120){
+        activeVerse = verses[i];
+        break;
+      }
+    }
+  }
+
+  if(!activeVerse){
+    activeVerse = verses[0];
+  }
+
+  const ref = activeVerse.dataset.ref;
+  const index = activeVerse.dataset.index;
+
+  position.innerText =
+    `${ref} — verse ${Number(index).toLocaleString()} of ${TOTAL.toLocaleString()}`;
+
+  stickyRef.innerText = ref.split(":")[0];
+
+  const scrollable = document.body.scrollHeight - window.innerHeight;
+  const scrolled = scrollable > 0 ? window.scrollY / scrollable : 0;
+  document.getElementById("progress").style.width = (scrolled * 100) + "%";
+}
+
+window.addEventListener("scroll",updatePosition);
+
+const observer=new IntersectionObserver((entries)=>{
+if(entries[0].isIntersecting){
+load();
+}
+},{
+rootMargin:"600px"
+});
+
+observer.observe(sentinel);
+
+async function jump(){
+
+  const val=document.getElementById("jumpInput").value.trim();
+  if(!val) return;
+
+  if(/^\d+$/.test(val)){
+  let num = parseInt(val);
+
+  if(num < 1) num = 1;
+  if(num > TOTAL) num = TOTAL;
+
+  nextIndex = num;
+  }
+  else {
+
+  const normalized = normalizeReference(val);
+
+  const r = await fetch(
+    `${API}?reference=${encodeURIComponent(normalized)}&version=${VERSION}`,
+    {headers:{Authorization:`Bearer ${KEY}`}}
+  );
+
+  const d = await r.json();
+
+  if(d.data && d.data.length){
+    nextIndex = d.data[0].verse_index;
+  }else{
+    return;
+  }
+}
+
+  reader.innerHTML="";
+  lastBook=null;
+  lastChapter=null;
+
+  window.scrollTo({top:0});
+
+  await load();
+
+  requestAnimationFrame(() => {
+    updatePosition();
+    highlightActiveVerse();
+  });
+}
+
+document.getElementById("jumpBtn").onclick=jump;
+
+document.getElementById("jumpInput")
+.addEventListener("keydown",e=>{
+if(e.key==="Enter") jump();
+});
+
+document.getElementById("midBtn").onclick=()=>{
+document.getElementById("jumpInput").value=15551;
+jump();
+};
+
+document.getElementById("versionSelect").onchange = async () => {
+
+  VERSION = document.getElementById("versionSelect").value;
+
+  let currentIndex = nextIndex;
+
+  const verses = document.querySelectorAll(".verse");
+  if (verses.length) {
+    currentIndex = parseInt(verses[0].dataset.index);
+  }
+
+  reader.innerHTML = "";
+  lastBook = null;
+  lastChapter = null;
+  stickyRef.innerText = "";
+  position.innerText = "";
+
+  nextIndex = currentIndex;
+
+  window.scrollTo({ top: 0 });
+
+  await load();
+
+  requestAnimationFrame(() => {
+    updatePosition();
+    highlightActiveVerse();
+  });
+};
+
+load();
+
+</script>
+
+</body>
+</html>
